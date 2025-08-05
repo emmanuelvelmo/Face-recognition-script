@@ -7,32 +7,22 @@ import numpy # Operaciones con arrays numéricos (coordenadas de rostros)
 umbral_similitud = 0.75 # Umbral de similitud para coincidencias faciales (0-1)
 
 # FUNCIONES
-# Compara rostros usando similitud coseno y devuelve nivel de coincidencia
-def comparar_rostros_similitud(imagen_referencia, codigo_comparar):
-    # Normalizar vectores de características faciales
-    codigo_ref_normalizado = imagen_referencia / numpy.linalg.norm(imagen_referencia)
-    codigo_comp_normalizado = codigo_comparar / numpy.linalg.norm(codigo_comparar)
-    
-    # Calcular similitud coseno entre vectores normalizados
-    return numpy.dot(codigo_ref_normalizado, codigo_comp_normalizado)
-
 # Compara rostros encontrados con imagen de referencia y recopila coincidencias
-def comparar_rostros_directorio(dir_imagen, rostros_imgs, imagen_referencia, modelo_embeddings):
+def comparar_rostros(dir_imagen, rostros_imagen, vec_img_ref, modelo_embeddings):
     coincidencias_encontradas = [] # Lista para almacenar coincidencias con similitud
     
     # Comparar cada rostro detectado con la referencia
-    for indice_rostro, rostro_iter in enumerate(rostros_imgs, 1):
+    for indice_rostro, rostro_iter in enumerate(rostros_imagen, 1):
         try:
             # Obtener código de características del rostro actual
-            codigo_rostro = obtener_codigo_facial(rostro_iter, modelo_embeddings)
+            vector_rostro = calc_vector_embedding(rostro_iter, modelo_embeddings)
             
-            # Calcular similitud con rostro de referencia
-            similitud = comparar_rostros_similitud(imagen_referencia, codigo_rostro)
+            # Compara rostros usando similitud coseno y devuelve nivel de coincidencia
+            similitud_val = numpy.dot(vec_img_ref / numpy.linalg.norm(vec_img_ref), vector_rostro / numpy.linalg.norm(vector_rostro))
             
             # Verificar si supera el umbral de similitud
-            if similitud > umbral_similitud:
-                coincidencias_encontradas.append((str(dir_imagen), similitud, indice_rostro))
-                
+            if similitud_val > umbral_similitud:
+                coincidencias_encontradas.append((str(dir_imagen), similitud_val, indice_rostro))
         except Exception as e:
             continue # Ignorar errores en rostros individuales
     
@@ -53,9 +43,9 @@ def recortar_rostros(ruta_imagen, modelo_caffe):
     rostros_imagenes = []
     
     # Recortar cada rostro detectado sin márgenes adicionales
-    for (x, y, w, h) in rostros_coordenadas:
+    for (x_val, y_val, ancho_val, altura_val) in rostros_coordenadas:
         # Recortar región exacta del rostro detectado
-        rostro_recortado = imagen_val[y:y+h, x:x+w]
+        rostro_recortado = imagen_val[y_val : y_val + altura_val, x_val : x_val + ancho_val]
         
         # Agregar imagen al array de imágenes de rostros
         rostros_imagenes.append(rostro_recortado)
@@ -63,7 +53,7 @@ def recortar_rostros(ruta_imagen, modelo_caffe):
     return rostros_imagenes
 
 # Procesamiento recursivo de imágenes y comparación con referencia
-def procesar_directorio_imagenes(directorio_entrada, extensiones_lista, imagen_referencia, modelo_caffe, modelo_embeddings):
+def procesar_directorio_imagenes(directorio_entrada, extensiones_lista, vec_img_ref, modelo_caffe, modelo_embeddings):
     total_imagenes_procesadas = 0
     contador_coincidencias = 0
     
@@ -72,24 +62,25 @@ def procesar_directorio_imagenes(directorio_entrada, extensiones_lista, imagen_r
     
     # Procesar recursivamente cada imagen en el directorio
     for extension_val in extensiones_lista:
-        for archivo_imagen in pathlib.Path(directorio_entrada).rglob(f'*.{extension_val}'):
-            if archivo_imagen.is_file():
+        for archivo_iter in pathlib.Path(directorio_entrada).rglob(f'*.{extension_val}'):
+            if archivo_iter.is_file():
                 # Extraer rostros de la imagen actual
-                rostros_encontrados = recortar_rostros(archivo_imagen, modelo_caffe)
+                rostros_imagen = recortar_rostros(archivo_iter, modelo_caffe)
                 
                 # Comparar rostros si se encontró alguno
-                if rostros_encontrados:
-                    coincidencias_imagen = comparar_rostros_directorio(archivo_imagen, rostros_encontrados, imagen_referencia, modelo_embeddings)
+                if rostros_imagen:
+                    coincidencias_imagen = comparar_rostros(archivo_iter, rostros_imagen, vec_img_ref, modelo_embeddings)
                     
                     # Mostrar coincidencias inmediatamente
                     if coincidencias_imagen:
                         # Contar cuántas coincidencias hay en esta imagen
-                        for ruta_imagen, similitud, numero_rostro in coincidencias_imagen:
+                        for ruta_imagen, similitud_val, numero_rostro in coincidencias_imagen:
                             contador_coincidencias += 1
+                            
                             if len(coincidencias_imagen) > 1:
-                                print(f"{contador_coincidencias}. (Face {numero_rostro}) [{similitud*100:.1f}%] {ruta_imagen}")
+                                print(f"{contador_coincidencias}. (Face {numero_rostro}) [{similitud_val*100:.1f}%] {ruta_imagen}")
                             else:
-                                print(f"{contador_coincidencias}. [{similitud*100:.1f}%] {ruta_imagen}")
+                                print(f"{contador_coincidencias}. [{similitud_val*100:.1f}%] {ruta_imagen}")
                 
                 total_imagenes_procesadas += 1
     
@@ -104,7 +95,7 @@ def procesar_directorio_imagenes(directorio_entrada, extensiones_lista, imagen_r
     print("-" * 36 + "\n")
 
 # Extrae vector de características faciales usando modelo de embeddings
-def obtener_codigo_facial(rostro_imagen, modelo_embeddings):
+def calc_vector_embedding(rostro_imagen, modelo_embeddings):
     # Redimensionar rostro a tamaño requerido por OpenFace (96x96)
     rostro_redimensionado = cv2.resize(rostro_imagen, (96, 96))
     
@@ -137,49 +128,45 @@ def coordenadas_rostros(imagen_val, modelo_caffe):
         # Filtrar detecciones con confianza mayor al umbral (70%)
         if umbral_confianza > 0.7: # Umbral de confianza para reducir falsos positivos
             # Extraer coordenadas del rostro y escalar a dimensiones originales
-            caja = detecciones_val[0, 0, iter_val, 3:7] * numpy.array([ancho_val, alto_val, ancho_val, alto_val])
+            caja_val = detecciones_val[0, 0, iter_val, 3:7] * numpy.array([ancho_val, alto_val, ancho_val, alto_val])
             
             # Convertir coordenadas flotantes a enteros
-            (x1, y1, x2, y2) = caja.astype("int")
+            (x1, y1, x2, y2) = caja_val.astype("int")
             
             # Asegurar que las coordenadas estén dentro de los límites de la imagen
             x1, y1 = max(0, x1), max(0, y1)
             x2, y2 = min(ancho_val, x2), min(alto_val, y2)
             
             # Convertir formato de coordenadas (x1,y1,x2,y2) a (x, y, ancho, alto)
-            rostros_coords.append((x1, y1, x2-x1, y2-y1))
+            rostros_coords.append((x1, y1, x2 - x1, y2 - y1))
     
     return rostros_coords
 
 # Procesa imagen de referencia y extrae características del primer rostro encontrado
-def procesar_imagen_referencia(ruta_imagen_ref, modelo_caffe, modelo_embeddings):
+def procesar_imagen_referencia(ruta_imagen_referencia, modelo_caffe, modelo_embeddings):
     # Cargar imagen de referencia desde archivo
-    imagen_referencia = cv2.imread(str(ruta_imagen_ref))
+    vec_img_ref = cv2.imread(str(ruta_imagen_referencia))
     
-    if imagen_referencia is None:
+    if vec_img_ref is None:
+        return None # Terminar función, retornar valor nulo
+    
+    # Detectar rostros en imagen de referencia
+    rostros_coordenadas = coordenadas_rostros(vec_img_ref, modelo_caffe)
+    
+    # Verificar que se encontró exactamente un rostro
+    if len(rostros_coordenadas) != 1:
         return None
     
-    try:
-        # Detectar rostros en imagen de referencia
-        rostros_coordenadas = coordenadas_rostros(imagen_referencia, modelo_caffe)
-        
-        # Verificar que se encontró exactamente un rostro
-        if len(rostros_coordenadas) != 1:
-            return None
-        
-        # Extraer coordenadas del único rostro encontrado
-        (x, y, w, h) = rostros_coordenadas[0]
-        
-        # Recortar rostro de referencia sin márgenes adicionales
-        rostro_referencia = imagen_referencia[y:y+h, x:x+w]
-        
-        # Obtener vector de características del rostro de referencia
-        imagen_referencia = obtener_codigo_facial(rostro_referencia, modelo_embeddings)
-        
-        return imagen_referencia
-        
-    except Exception as e:
-        return None
+    # Extraer coordenadas del único rostro encontrado
+    (x_val, y_val, ancho_val, altura_val) = rostros_coordenadas[0]
+    
+    # Recortar rostro de referencia sin márgenes adicionales
+    rostro_referencia = vec_img_ref[y_val : y_val + altura_val, x_val : x_val + ancho_val]
+    
+    # Calcular vector de características del rostro de referencia
+    imagen_referencia = calc_vector_embedding(rostro_referencia, modelo_embeddings)
+    
+    return imagen_referencia # Retornar embedding de rostro
 
 # Buscar y procesar imagen de referencia en carpeta "ref"
 def cargar_imagen_referencia(extensiones_lista, modelo_caffe, modelo_embeddings):
@@ -194,32 +181,32 @@ def cargar_imagen_referencia(extensiones_lista, modelo_caffe, modelo_embeddings)
     
     # Buscar primera imagen válida en carpeta "ref"
     while True:
-        imagen_referencia_encontrada = None
+        ruta_imagen_referencia = None
         
         # Buscar archivos con extensiones válidas
         for extension_val in extensiones_lista:
             for archivo_iter in carpeta_referencia.glob(f'*.{extension_val}'):
                 if archivo_iter.is_file():
-                    imagen_referencia_encontrada = archivo_iter
+                    ruta_imagen_referencia = archivo_iter
                     
                     break # Cierra el primer ciclo For
             
-            if imagen_referencia_encontrada:
+            if ruta_imagen_referencia:
                 break # Cierra el segundo ciclo For
         
         # Verificar si se encontró imagen de referencia
-        if not imagen_referencia_encontrada:
+        if not ruta_imagen_referencia:
             # Carpeta existe pero sin imagen
             input('Place reference image in "ref" folder and press Enter...')
             
             continue # Volver al inicio del ciclo While
         
         # Procesar imagen de referencia encontrada
-        imagen_referencia = procesar_imagen_referencia(imagen_referencia_encontrada, modelo_caffe, modelo_embeddings)
+        vec_img_ref = procesar_imagen_referencia(ruta_imagen_referencia, modelo_caffe, modelo_embeddings)
         
-        if imagen_referencia is not None:
+        if vec_img_ref is not None:
             # Imagen válida encontrada: continuar
-            return imagen_referencia
+            return vec_img_ref
         else:
             # Imagen inválida: solicitar reemplazo
             input('Place valid image in "ref" folder and press Enter...')
@@ -262,7 +249,7 @@ try:
     modelo_caffe, modelo_embeddings = cargar_modelos()
     
     # Obtener imagen de referencia al inicio
-    imagen_referencia = cargar_imagen_referencia(extensiones_lista, modelo_caffe, modelo_embeddings)
+    vec_img_ref = cargar_imagen_referencia(extensiones_lista, modelo_caffe, modelo_embeddings)
     
     # Bucle principal del programa
     while True:
@@ -277,7 +264,7 @@ try:
                 break
         
         # Ejecutar detección y comparación de rostros
-        procesar_directorio_imagenes(directorio_entrada, extensiones_lista, imagen_referencia, modelo_caffe, modelo_embeddings)
+        procesar_directorio_imagenes(directorio_entrada, extensiones_lista, vec_img_ref, modelo_caffe, modelo_embeddings)
         
 except Exception as e:
     print("Model files not found")
